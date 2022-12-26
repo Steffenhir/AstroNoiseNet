@@ -70,15 +70,25 @@ class Net():
                 self.short.append(np.moveaxis(np.array([fits.getdata(self.train_folder + "/short/" + i, ext=0)]), 0, 2))
                 self.long.append(np.moveaxis(np.array([fits.getdata(self.train_folder + "/long/" + i, ext=0)]), 0, 2))
         
+        
+        linked_stretch = True
+        
         for image in self.short:
             median = []
             mad = []
-            for c in range(image.shape[-1]):
-                median.append(np.median(image[:,:,c]))
-                mad.append(np.median(np.abs(image[:,:,c] - median[c])))
+            
+            if linked_stretch:
+                for c in range(image.shape[-1]):
+                    median.append(np.median(image[:,:,:]))
+                    mad.append(np.median(np.abs(image[:,:,:] - median[c])))
+            else:
+                for c in range(image.shape[-1]):
+                    median.append(np.median(image[:,:,c]))
+                    mad.append(np.median(np.abs(image[:,:,c] - median[c])))
                 
             self.median.append(median)
             self.mad.append(mad)
+        
         
         total_pixels = 0
         
