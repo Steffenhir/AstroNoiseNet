@@ -141,7 +141,15 @@ class Net():
     def _augmentator(self, o, s, median, mad):
         
         #self.linear_fit(o, s, 0.95)
-                   
+        
+        if self.mode == "RGB":
+            # scale colors
+            if np.random.rand() < 0.2:
+                ch = int(np.random.rand() * 3)
+                scale = 1.0 + (0.5 - np.random.rand())
+                o[:, :, ch] = o[:, :, ch] * scale
+                s[:, :, ch] = s[:, :, ch] * scale
+        
         # stretch
         sigma = 1.5 + (4.0-1.5)*np.random.rand()
         bg = 0.15 + (0.3-0.15)*np.random.rand()
