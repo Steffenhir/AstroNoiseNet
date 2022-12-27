@@ -135,21 +135,14 @@ class Net():
     
     def linear_fit(self, o, s, clipping):
         for c in range(o.shape[-1]):
-            coeff = np.polyfit(s[:,:,c].flatten(), o[:,:,c].flatten(), 1)
+            indx_clipped = o[:,:,c].flatten() < clipping
+            coeff = np.polyfit(s[:,:,c].flatten()[indx_clipped], o[:,:,c].flatten()[indx_clipped], 1)
             s[:,:,c] = s[:,:,c]*coeff[0] + coeff[1]
             
     def _augmentator(self, o, s, median, mad):
         
-        #self.linear_fit(o, s, 0.95)
-        
-        if self.mode == "RGB":
-            # scale colors
-            if np.random.rand() < 0.2:
-                ch = int(np.random.rand() * 3)
-                scale = 1.0 + (0.5 - np.random.rand())
-                o[:, :, ch] = o[:, :, ch] * scale
-                s[:, :, ch] = s[:, :, ch] * scale
-        
+        self.linear_fit(o, s, 0.95)
+                   
         # stretch
         sigma = 1.5 + (4.0-1.5)*np.random.rand()
         bg = 0.15 + (0.3-0.15)*np.random.rand()
@@ -158,8 +151,7 @@ class Net():
         #bg = 0.15
         
         o, s = stretch(o, s, bg, sigma, median, mad)
-        
-        #self.linear_fit(o, s, 0.95)
+
                       
         # flip horizontally
         if np.random.rand() < 0.50:
@@ -178,6 +170,13 @@ class Net():
             s = np.rot90(s, k, axes = (1, 0))
         
         if self.mode == 'RGB':
+            
+            # scale colors
+            if np.random.rand() < 0.2:
+                ch = int(np.random.rand() * 3)
+                scale = 1.0 + (0.5 - np.random.rand())
+                o[:, :, ch] = o[:, :, ch] * scale
+                s[:, :, ch] = s[:, :, ch] * scale
             
             # change saturation
             if np.random.rand() < 0.75:
