@@ -192,6 +192,9 @@ class Net():
         if history:
             with open(history + '_' + self.mode + '.pkl', "rb") as h:
                 self.history = pickle.load(h)
+                
+            with open(history + '_val_' + self.mode + '.pkl', "rb") as h:
+                self.val_history = pickle.load(h)
   
     def initialize_model(self):
         self.load_model()
@@ -678,8 +681,8 @@ Net.load_training_dataset()
 Net.load_model()
 #Net.load_model()
 
-Net.train(1, plot_progress = True, plot_interval = 100, augmentation=True, save_backups=False, warm_up = False)
-#Net.save_model('./weights', './history')
+Net.train(5, plot_progress = True, plot_interval = 100, augmentation=True, save_backups=False, warm_up = False)
+Net.save_model('./weights', './history')
 
 Net.plot_history()
 #Net.transform("./noisy.fits","denoised")
