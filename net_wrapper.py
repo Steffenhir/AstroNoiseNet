@@ -1,6 +1,10 @@
 from os import listdir
 from os.path import isfile, join
 import numpy as np
+
+import warnings
+warnings.simplefilter('ignore', np.RankWarning)
+
 import tensorflow as tf
 import tensorflow.keras as K
 import tensorflow.keras.layers as L
@@ -10,6 +14,7 @@ import scipy
 from astropy.io import fits
 from matplotlib import pyplot as plt
 
+
 from stretch import stretch
 from pridnet import pridnet
 from unet import unet
@@ -17,7 +22,8 @@ from unet import unet
 from IPython import display
 
 class Net():
-    def __init__(self, mode:str, window_size:int = 512, stride:int = 256, lr:float = 1e-4, train_folder:str = './train/', batch_size:int = 1):
+    def __init__(self, mode:str, window_size:int = 512, stride:int = 256, lr:float = 1e-4, train_folder:str = './train/', batch_size:int = 1,
+                 validation_folder:str = "./validation/", validation:bool = False):
         assert mode in ['RGB', 'Greyscale'], "Mode should be either RGB or Greyscale"
         self.mode = mode
         if self.mode == 'RGB': self.input_channels = 3
@@ -25,9 +31,11 @@ class Net():
         self.window_size = window_size
         self.stride = stride
         self.train_folder = train_folder
+        self.validation_folder = validation_folder
+        self.validation = validation
         self.batch_size = batch_size
         self.history = {}
-        self._ema = 0.9995
+        self.val_history = {}
         self.weights = []
         self.lr = lr
         
@@ -109,6 +117,64 @@ class Net():
         print("One epoch is set to %d iterations" % self.iters_per_epoch)
         print("Training dataset has been successfully loaded!")
         
+        if self.validation:
+            self.load_validation_dataset()
+
+        
+    def load_validation_dataset(self):
+        val_short_files = [f for f in listdir(self.validation_folder + "/short/") if isfile(join(self.validation_folder + "/short/", f))\
+                          and f.endswith(".fits")]
+        val_long_files = [f for f in listdir(self.validation_folder + "/long/") if isfile(join(self.validation_folder + "/long/", f))\
+                          and f.endswith(".fits")]
+        
+        assert len(val_short_files) == len(val_long_files), 'Numbers of files in `long` and `short` validation subfolders should be equal'
+        
+        assert len(val_short_files) > 0 and len(val_long_files) > 0, 'No validation data found in {}'.format(self.validation_train_folder)
+        
+        for i in range(len(val_short_files)):
+            assert(val_short_files[i] == val_long_files[i]), 'Corresponding names of short and long validation files should be equal'
+        
+        print("Total validation images found: {}".format(len(val_short_files)))
+        
+        self.val_short = []
+        self.val_long = []
+        
+        self.val_median = []
+        self.val_mad = []
+        
+        for i in val_short_files:
+            if self.mode == "RGB":
+                self.val_short.append(np.moveaxis(fits.getdata(self.validation_folder + "/short/" + i, ext=0), 0, 2))
+                self.val_long.append(np.moveaxis(fits.getdata(self.validation_folder + "/long/" + i, ext=0), 0, 2))
+                
+                     
+            else:
+                self.val_short.append(np.moveaxis(np.array([fits.getdata(self.validation_folder + "/short/" + i, ext=0)]), 0, 2))
+                self.val_long.append(np.moveaxis(np.array([fits.getdata(self.validation_folder + "/long/" + i, ext=0)]), 0, 2))
+        
+        
+        linked_stretch = True
+        
+        for image in self.val_short:
+            median = []
+            mad = []
+            
+            if linked_stretch:
+                for c in range(image.shape[-1]):
+                    median.append(np.median(image[:,:,:]))
+                    mad.append(np.median(np.abs(image[:,:,:] - median[c])))
+            else:
+                for c in range(image.shape[-1]):
+                    median.append(np.median(image[:,:,c]))
+                    mad.append(np.median(np.abs(image[:,:,c] - median[c])))
+                
+            self.val_median.append(median)
+            self.val_mad.append(mad)
+            
+        
+        print("Validation dataset has been successfully loaded!")
+ 
+
     def load_model(self, weights = None, history = None):
         self.G = self._generator()
         self.D = self._discriminator()
@@ -258,6 +324,9 @@ class Net():
         for e in range(epochs):
             for i in range(self.iters_per_epoch):
                 
+                if self.validation and i % 1000 == 0:
+                    self.validate()
+                
                 x, y = self.generate_input(augmentation = augmentation)
 
                 x = x * 2 - 1
@@ -291,7 +360,7 @@ class Net():
                     display.display(plt.gcf())
                 
                 if i > 0:
-                    print("\rEpoch: %d. Iteration %d / %d Loss %f L1 Loss %f   " % (e, i, self.iters_per_epoch, self.history['total'][-1], self.history['gen_L1'][-1]), end = '')
+                    print("\rEpoch: %d. Iteration %d / %d Loss %f L1 Loss %f   " % (e, i, self.iters_per_epoch, np.mean(self.history['total'][-500:]), np.mean(self.history['gen_L1'][-500:])), end = '')
                     #print("\rEpoch: %d. Iteration %d / %d L1 Loss %f   " % (e, i, self.iters_per_epoch, self.history['gen_L1'][-1]), end = '')
                 else:
                     print("\rEpoch: %d. Iteration %d / %d " % (e, i, self.iters_per_epoch), end = '')
@@ -344,7 +413,7 @@ class Net():
                     
                     for k in d:
                         if k in self.history.keys():
-                            self.history[k].append(d[k] * (1 - self._ema) + self.history[k][-1] * self._ema)
+                            self.history[k].append(d[k])
                         else:
                             self.history[k] = [d[k]]
                     
@@ -364,7 +433,68 @@ class Net():
                     self.D.save_weights("./Net_backup_D_odd.h5")
             
             if plot_progress: plt.close()
+
     
+    def validate(self):
+        
+        print("Start validation")
+        
+        val_metrics = {"L1_loss": 0.0, "dis_loss": 0.0, "psnr": 0.0, "SSIM": 0.0}
+
+        
+        for i in range(len(self.val_short)):
+            h, w, _ = self.val_short[i].shape
+            
+            ith = h // self.window_size
+            itw = w // self.window_size
+            
+            num_iterations = 0
+            
+            for x in range(ith):
+                for y in range(itw):
+                    num_iterations += 1
+                    
+                    # Slice
+                    short = self.val_short[i][x*self.window_size:(x+1)*self.window_size,y*self.window_size:(y+1)*self.window_size]
+                    long = self.val_long[i][x*self.window_size:(x+1)*self.window_size,y*self.window_size:(y+1)*self.window_size]
+                    
+                    self.linear_fit(short, long, 0.95)
+                    
+                    # Stretch
+                    bg = 0.2
+                    sigma = 2.0
+                    short, long = stretch(short, long, bg, sigma, self.val_median[i], self.val_mad[i])
+                    
+                    self.linear_fit(short, long, 0.95)
+                    
+                    output = self.G(np.expand_dims(short * 2 - 1, axis = 0))[0]
+                    output = (output + 1) / 2
+                    
+                    # Calculate metrics
+                    val_metrics["L1_loss"] += tf.reduce_mean(tf.abs(long - output)) * 2 * 100
+                    
+                    p1_real, p2_real, p3_real, p4_real, p5_real, p6_real, p7_real, p8_real, predict_real = self.D(np.expand_dims(long*2 - 1, axis = 0))
+                    p1_fake, p2_fake, p3_fake, p4_fake, p5_fake, p6_fake, p7_fake, p8_fake, predict_fake = self.D(np.expand_dims(output*2 - 1, axis = 0))
+                    
+                    val_metrics["dis_loss"] += tf.reduce_mean(-(tf.math.log(predict_real + 1E-8) + tf.math.log(1 - predict_fake + 1E-8)))
+                    
+                    val_metrics["psnr"] += tf.image.psnr(long, output, max_val = 1.0)
+                    val_metrics["SSIM"] += tf.image.ssim(long, output, max_val = 1.0)
+                    
+                    
+        
+        for metric in val_metrics:
+            if metric in self.val_history:
+                self.val_history[metric].append(val_metrics[metric] / num_iterations)
+            else:
+                self.val_history[metric] = [val_metrics[metric] / num_iterations]
+                
+            print(metric + ": " + str(val_metrics[metric] / num_iterations))
+        
+        
+        print("Finished validation")
+                    
+                           
     
     def plot_history(self, last = None):
         assert self.history != {}, 'Empty training history, nothing to plot'
@@ -380,12 +510,29 @@ class Net():
                 else: ax[i][j].plot(self.history[keys[j+3*i]])
                 ax[i][j].set_title(keys[j+3*i])
                 
+        
+        
+        
+        fig, ax = plt.subplots(1, 4, sharex = True, figsize=(16, 14))
+        
+        keys = list(self.val_history.keys())
+        
+        keys = [k for k in keys if k != '']
+        
+        for i in range(4):
+            if last: ax[i].plot(self.val_history[keys[i]][-last:])
+            else: ax[i].plot(self.val_history[keys[i]])
+            ax[i].set_title(keys[i])
+                
     def save_model(self, weights_filename, history_filename = None):
         self.G.save_weights(weights_filename + '_G_' + self.mode + '.h5')
         self.D.save_weights(weights_filename + '_D_' + self.mode + '.h5')
         if history_filename:
             with open(history_filename + '_' + self.mode + '.pkl', 'wb') as f:
                 pickle.dump(self.history, f)
+                
+            with open(history_filename + '_val_' + self.mode + '.pkl', 'wb') as f:
+                pickle.dump(self.val_history, f)
       
     def transform(self, in_name, out_name):
         print("Started")
@@ -523,15 +670,16 @@ class Net():
     
 
 
-Net = Net(mode = 'RGB', window_size = 256, train_folder = './train/', lr = 1e-4, batch_size = 1, stride=128)
+Net = Net(mode = 'RGB', window_size = 256, train_folder = './train/', lr = 1e-4, batch_size = 1, stride=128, 
+          validation_folder = "./validation/", validation = True)
 Net.load_training_dataset()
 
 #Net.load_model('./weights_pridnet_mit_sellayer_dis/weights')
-Net.load_model('./weights')
+Net.load_model()
 #Net.load_model()
 
-Net.train(5, plot_progress = True, plot_interval = 50, augmentation=True, save_backups=False, warm_up = False)
-Net.save_model('./weights', './history')
+Net.train(1, plot_progress = True, plot_interval = 100, augmentation=True, save_backups=False, warm_up = False)
+#Net.save_model('./weights', './history')
 
-#Net.plot_history()
+Net.plot_history()
 #Net.transform("./noisy.fits","denoised")
