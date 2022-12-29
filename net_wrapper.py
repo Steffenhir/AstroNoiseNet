@@ -152,7 +152,9 @@ class Net():
         
         o, s = stretch(o, s, bg, sigma, median, mad)
 
-                      
+        self.linear_fit(o, s, 0.95)
+
+              
         # flip horizontally
         if np.random.rand() < 0.50:
             o = np.flip(o, axis = 1)
