@@ -74,6 +74,20 @@ def stretch_channel_single(o, c, bg, sigma, median, mad):
     o[:,:,c] = o_channel[:,:]
 
 
+def stretch_channel_single_inverse(o, c, bg, sigma, median, mad):
+    o_channel = o[:,:,c]
+    
+    shadow_clipping = np.clip(median - sigma*mad, 0, 1.0)
+    highlight_clipping = 1.0
+    midtone = MTF((median-shadow_clipping)/(highlight_clipping - shadow_clipping), bg)
+    
+    o_channel = MTF_inverse(o_channel, midtone)
+    
+    o_channel = o_channel * (highlight_clipping - shadow_clipping) + shadow_clipping
+    
+    o[:,:,c] = o_channel[:,:]
+    
+
 
 def stretch_single(o, bg, sigma, median, mad):
 
@@ -81,6 +95,15 @@ def stretch_single(o, bg, sigma, median, mad):
     
     for c in range(o_copy.shape[-1]):
         stretch_channel_single(o_copy, c, bg, sigma, median[c], mad[c])
+
+    return o_copy
+
+def stretch_single_inverse(o, bg, sigma, median, mad):
+
+    o_copy = np.copy(o)
+    
+    for c in range(o_copy.shape[-1]):
+        stretch_channel_single_inverse(o_copy, c, bg, sigma, median[c], mad[c])
 
     return o_copy
 
@@ -92,4 +115,13 @@ def MTF(data, midtone):
         data = (midtone-1) * data / ((2*midtone-1) * data - midtone)
 
     return data
+
+def MTF_inverse(data, midtone):
+    if type(data) is np.ndarray:
+        data[:] = midtone*data[:]/((2*midtone-1)*data[:]-(midtone-1))
+    else:
+        data = midtone * data / ((2*midtone-1) * data - (midtone-1))
+
+    return data
+
     
