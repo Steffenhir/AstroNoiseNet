@@ -13,11 +13,13 @@ import pickle
 import scipy
 from astropy.io import fits
 from matplotlib import pyplot as plt
+from matplotlib.colors import rgb_to_hsv, hsv_to_rgb 
 
 
 from stretch import stretch
 from pridnet import pridnet
 from unet import unet
+from ridnet import ridnet
 
 from IPython import display
 
@@ -86,9 +88,12 @@ class Net():
             mad = []
             
             if linked_stretch:
-                for c in range(image.shape[-1]):
-                    median.append(np.median(image[:,:,:]))
-                    mad.append(np.median(np.abs(image[:,:,:] - median[c])))
+                median_allcolors = np.median(image[::4,::4,:])
+                mad_allcolors = np.median(np.abs(image[::4,::4,:] - median_allcolors))
+                
+                median = [median_allcolors for i in range(self.input_channels)]
+                mad = [mad_allcolors for i in range(self.input_channels)]
+
             else:
                 for c in range(image.shape[-1]):
                     median.append(np.median(image[:,:,c]))
@@ -110,7 +115,7 @@ class Net():
         
         print("Total size of training images: %.2f MP" % (total_pixels / 1e6))
         
-        self.iters_per_epoch = total_pixels // (self.window_size * self.window_size)
+        self.iters_per_epoch = total_pixels // (self.window_size * self.window_size) // 2
         
         self.weights = [i / np.sum(self.weights) for i in self.weights]
         
@@ -221,8 +226,6 @@ class Net():
         
         o, s = stretch(o, s, bg, sigma, median, mad)
 
-        self.linear_fit(o, s, 0.95)
-
               
         # flip horizontally
         if np.random.rand() < 0.50:
@@ -242,42 +245,34 @@ class Net():
         
         if self.mode == 'RGB':
             
-            # scale colors
-            if np.random.rand() < 0.2:
-                ch = int(np.random.rand() * 3)
-                scale = 1.0 + (0.5 - np.random.rand())
-                o[:, :, ch] = o[:, :, ch] * scale
-                s[:, :, ch] = s[:, :, ch] * scale
+            o_hsv = rgb_to_hsv(o)
+            s_hsv = rgb_to_hsv(s)
             
-            # change saturation
-            if np.random.rand() < 0.75:
-                sat = 1.0 + 1.5 * np.random.rand()
-                o_copy = tf.image.adjust_saturation(o, sat)
-                s_copy = tf.image.adjust_saturation(s, sat)
-                
-                o[:,:,:] = o_copy[:,:,:]
-                s[:,:,:] = s_copy[:,:,:]
+            # tweak hue
+            hue = np.random.normal(0,0.2)
+            o_hsv[:,:,0] += hue
+            s_hsv[:,:,0] += hue
             
-            # tweak colors        
-            if np.random.rand() < 0.05:
-                ch = int(np.random.rand() * 3)
-                m = np.min((o, s))
-                offset = np.random.rand() * 0.25 - np.random.rand() * m
-                o[:, :, ch] = o[:, :, ch] + offset * (1.0 - o[:, :, ch])
-                s[:, :, ch] = s[:, :, ch] + offset * (1.0 - s[:, :, ch])
-            
-            
-
-            # flip channels
-            if np.random.rand() < 0.15:
-                seq = np.arange(3)
-                np.random.shuffle(seq)
-                Xtmp = np.copy(o)
-                Ytmp = np.copy(s)
-                for i in range(3):
-                    o[:, :, i] = Xtmp[:, :, seq[i]]
-                    s[:, :, i] = Ytmp[:, :, seq[i]]
+            o_hsv[:,:,0] = np.where(o_hsv[:,:,0] < 0, o_hsv[:,:,0] + 1, o_hsv[:,:,0])
+            o_hsv[:,:,0] = np.where(o_hsv[:,:,0] > 1, o_hsv[:,:,0] - 1, o_hsv[:,:,0])
+            s_hsv[:,:,0] = np.where(s_hsv[:,:,0] < 0, s_hsv[:,:,0] + 1, s_hsv[:,:,0])
+            s_hsv[:,:,0] = np.where(s_hsv[:,:,0] > 1, s_hsv[:,:,0] - 1, s_hsv[:,:,0])
         
+            # tweak saturation
+            sat = np.random.normal(1.25,0.25)
+            o_hsv[:,:,1] *= sat
+            s_hsv[:,:,1] *= sat           
+            
+            # tweak value
+            val = np.random.normal(0,0.1)
+            o_hsv[:,:,2] += val
+            s_hsv[:,:,2] += val
+            
+            o_hsv = np.clip(o_hsv,0,1)
+            s_hsv = np.clip(s_hsv,0,1)
+            
+            o[:,:,:] = hsv_to_rgb(o_hsv)
+            s[:,:,:] = hsv_to_rgb(s_hsv)
                     
         else:
             # tweak brightness
@@ -327,7 +322,7 @@ class Net():
         for e in range(epochs):
             for i in range(self.iters_per_epoch):
                 
-                if self.validation and i % 1000 == 0:
+                if self.validation and i % 1000 == 0 and i != 0:
                     self.validate()
                 
                 x, y = self.generate_input(augmentation = augmentation)
@@ -465,10 +460,9 @@ class Net():
                     
                     # Stretch
                     bg = 0.2
-                    sigma = 2.0
+                    sigma = 3.0
                     short, long = stretch(short, long, bg, sigma, self.val_median[i], self.val_mad[i])
                     
-                    self.linear_fit(short, long, 0.95)
                     
                     output = self.G(np.expand_dims(short * 2 - 1, axis = 0))[0]
                     output = (output + 1) / 2
@@ -482,6 +476,7 @@ class Net():
                     val_metrics["dis_loss"] += tf.reduce_mean(-(tf.math.log(predict_real + 1E-8) + tf.math.log(1 - predict_fake + 1E-8)))
                     
                     val_metrics["psnr"] += tf.image.psnr(long, output, max_val = 1.0)
+
                     val_metrics["SSIM"] += tf.image.ssim(long, output, max_val = 1.0)
                     
                     
@@ -514,20 +509,21 @@ class Net():
                 ax[i][j].set_title(keys[j+3*i])
                 
         
+        if self.validation:
         
-        
-        fig, ax = plt.subplots(1, 4, sharex = True, figsize=(16, 14))
-        
-        keys = list(self.val_history.keys())
-        
-        keys = [k for k in keys if k != '']
-        
-        for i in range(4):
-            if last: ax[i].plot(self.val_history[keys[i]][-last:])
-            else: ax[i].plot(self.val_history[keys[i]])
-            ax[i].set_title(keys[i])
+            fig, ax = plt.subplots(1, 4, sharex = True, figsize=(16, 14))
+            
+            keys = list(self.val_history.keys())
+            
+            keys = [k for k in keys if k != '']
+            
+            for i in range(4):
+                if last: ax[i].plot(self.val_history[keys[i]][-last:])
+                else: ax[i].plot(self.val_history[keys[i]])
+                ax[i].set_title(keys[i])
                 
     def save_model(self, weights_filename, history_filename = None):
+
         self.G.save_weights(weights_filename + '_G_' + self.mode + '.h5')
         self.D.save_weights(weights_filename + '_D_' + self.mode + '.h5')
         if history_filename:
@@ -536,6 +532,9 @@ class Net():
                 
             with open(history_filename + '_val_' + self.mode + '.pkl', 'wb') as f:
                 pickle.dump(self.val_history, f)
+
+    def save(self, weights_filename, history_filename = None):
+        self.G.save(weights_filename)
       
     def transform(self, in_name, out_name):
         print("Started")
@@ -599,8 +598,9 @@ class Net():
          hdul.writeto(path + name + '.fits')       
 
     def _generator(self):
-        return pridnet(self.window_size,self.input_channels)
+        #return pridnet(self.window_size,self.input_channels)
         #return unet(self.window_size,self.input_channels)
+        return ridnet(self.window_size,self.input_channels)
         
     def _discriminator(self):
         layers = []
@@ -673,15 +673,15 @@ class Net():
     
 
 
-Net = Net(mode = 'RGB', window_size = 256, train_folder = './train/', lr = 1e-4, batch_size = 1, stride=128, 
-          validation_folder = "./validation/", validation = True)
+Net = Net(mode = 'RGB', window_size = 256, train_folder = './train/', lr = 1e-5, batch_size = 1, stride=128, 
+          validation_folder = "./validation/", validation = False)
 Net.load_training_dataset()
 
-#Net.load_model('./weights_pridnet_mit_sellayer_dis/weights')
-Net.load_model()
-#Net.load_model()
+#Net.load_model('./weights_ridnet_dis/weights')
+Net.load_model('./weights', './history')
 
-Net.train(5, plot_progress = True, plot_interval = 100, augmentation=True, save_backups=False, warm_up = False)
+
+Net.train(1, plot_progress = True, plot_interval = 50, augmentation=True, save_backups=False, warm_up = False)
 Net.save_model('./weights', './history')
 
 Net.plot_history()
