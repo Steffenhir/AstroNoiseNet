@@ -1,0 +1,12 @@
+{
+    "train_folder": "./train/",
+    "validation_folder": "./validation/",
+    "stride": 256,
+    "window_size": 512,
+    "batch_size": 1,
+    "validation": false,
+    "epochs": 1,
+    "augmentation": true,
+    "mode": "RGB",
+    "lr": 1e-4
+}

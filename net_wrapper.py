@@ -20,26 +20,32 @@ from stretch import stretch
 from pridnet import pridnet
 from unet import unet
 from ridnet import ridnet
+from config import Config, load_config
 
 from IPython import display
 
 class Net():
-    def __init__(self, mode:str, window_size:int = 512, stride:int = 256, lr:float = 1e-4, train_folder:str = './train/', batch_size:int = 1,
-                 validation_folder:str = "./validation/", validation:bool = False):
-        assert mode in ['RGB', 'Greyscale'], "Mode should be either RGB or Greyscale"
-        self.mode = mode
+    def __init__(self, config:Config):
+
+        assert config["mode"] in ['RGB', 'Greyscale'], "Mode should be either RGB or Greyscale"
+        self.mode = config["mode"]
         if self.mode == 'RGB': self.input_channels = 3
         else: self.input_channels = 1
-        self.window_size = window_size
-        self.stride = stride
-        self.train_folder = train_folder
-        self.validation_folder = validation_folder
-        self.validation = validation
-        self.batch_size = batch_size
+
+        self.window_size = config["window_size"]
+        self.stride = config["stride"]
+        self.train_folder = config["train_folder"]
+        self.validation_folder = config["validation_folder"]
+        self.validation = config["validation"]
+        self.batch_size = config["batch_size"]
+        self.lr = config["lr"]
+        self.epochs = config["epochs"]
+        self.augmentation = config["augmentation"]
+
         self.history = {}
         self.val_history = {}
         self.weights = []
-        self.lr = lr
+        
         
         self.short = []
         self.long = []   
@@ -295,13 +301,13 @@ class Net():
         else:
             return np.copy(self.long[r][h:h+self.window_size, w:w+self.window_size])
         
-    def generate_input(self, iterations = 1, augmentation = False):
+    def generate_input(self, iterations = 1):
         for _ in range(iterations):
             o = np.zeros((self.batch_size, self.window_size, self.window_size, self.input_channels), dtype = np.float32)
             s = np.zeros((self.batch_size, self.window_size, self.window_size, self.input_channels), dtype = np.float32)
                 
             for i in range(self.batch_size):
-                if augmentation:
+                if self.augmentation:
                     r = int(np.random.choice(range(len(self.short)), 1, p = self.weights))
                     h = np.random.randint(self.short[r].shape[0] - self.window_size)
                     w = np.random.randint(self.short[r].shape[1] - self.window_size)
@@ -316,16 +322,16 @@ class Net():
         return o, s
         
         
-    def train(self, epochs, augmentation = True, plot_progress = False, plot_interval = 50, save_backups = False, warm_up = False):
+    def train(self, plot_progress = False, plot_interval = 50, save_backups = False, warm_up = False):
         assert self.short != [], 'Training dataset was not loaded, use load_training_dataset() first'
         
-        for e in range(epochs):
+        for e in range(self.epochs):
             for i in range(self.iters_per_epoch):
                 
                 if self.validation and i % 1000 == 0 and i != 0:
                     self.validate()
                 
-                x, y = self.generate_input(augmentation = augmentation)
+                x, y = self.generate_input()
 
                 x = x * 2 - 1
                 y = y * 2 - 1
@@ -672,16 +678,16 @@ class Net():
         return K.Model(inputs = input, outputs = output, name = "discriminator")
     
 
+config = load_config("./config/my_config.json")
 
-Net = Net(mode = 'RGB', window_size = 256, train_folder = './train/', lr = 1e-5, batch_size = 1, stride=128, 
-          validation_folder = "./validation/", validation = False)
+Net = Net(config)
 Net.load_training_dataset()
 
 #Net.load_model('./weights_ridnet_dis/weights')
-Net.load_model('./weights', './history')
+Net.load_model(config["weights"], config["history"])
 
 
-Net.train(1, plot_progress = True, plot_interval = 50, augmentation=True, save_backups=False, warm_up = False)
+Net.train(plot_progress = True, plot_interval = 50, save_backups=False, warm_up = False)
 Net.save_model('./weights', './history')
 
 Net.plot_history()
