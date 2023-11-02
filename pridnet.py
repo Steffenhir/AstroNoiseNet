@@ -234,5 +234,6 @@ def pridnet(window_size, input_channels):
     unet1, unet2, unet3, unet4, unet5 = all_unet(pool1, pool2, pool3, pool4, pool5)
     resize1, resize2, resize3, resize4, resize5 = resize_all_image(unet1, unet2, unet3, unet4, unet5)
     out_image = to_clean_image(feature_map_2, resize1, resize2, resize3, resize4, resize5)
-
+    
+    out_image = tf.subtract(input, out_image)
     return K.Model(inputs = input, outputs = out_image, name = "generator")

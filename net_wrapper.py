@@ -59,8 +59,6 @@ class Net():
         
         assert len(short_files) > 0 and len(long_files) > 0, 'No training data found in {}'.format(self.train_folder)
         
-        for i in range(len(short_files)):
-            assert(short_files[i] == long_files[i]), 'Corresponding names of short and long files should be equal'
         
         print("Total training images found: {}".format(len(short_files)))
         
@@ -73,32 +71,14 @@ class Net():
         for i in short_files:
             if self.mode == "RGB":
                 self.short.append(np.moveaxis(fits.getdata(self.train_folder + "/short/" + i, ext=0), 0, 2))
-                self.long.append(np.moveaxis(fits.getdata(self.train_folder + "/long/" + i, ext=0), 0, 2))
-                
-                     
-            else:
-                self.short.append(np.moveaxis(np.array([fits.getdata(self.train_folder + "/short/" + i, ext=0)]), 0, 2))
-                self.long.append(np.moveaxis(np.array([fits.getdata(self.train_folder + "/long/" + i, ext=0)]), 0, 2))
-        
-        
-        linked_stretch = True
-        
-        for image in self.short:
-            median = []
-            mad = []
-            
-            if linked_stretch:
-                median_allcolors = np.median(image[::4,::4,:])
-                mad_allcolors = np.median(np.abs(image[::4,::4,:] - median_allcolors))
-                
-                median = [median_allcolors for i in range(self.input_channels)]
-                mad = [mad_allcolors for i in range(self.input_channels)]
 
-            else:
-                for c in range(image.shape[-1]):
-                    median.append(np.median(image[:,:,c]))
-                    mad.append(np.median(np.abs(image[:,:,c] - median[c])))
-                
+        for i in long_files:
+            self.long.append(np.moveaxis(fits.getdata(self.train_folder + "/long/" + i, ext=0), 0, 2))
+        
+        for img in self.short:
+            median = np.median(img[::4,::4,:], axis=[0,1])
+            mad = np.median(np.abs(img[::4,::4,:]-median), axis=[0,1])
+            
             self.median.append(median)
             self.mad.append(mad)
         
@@ -193,7 +173,7 @@ class Net():
 
         if weights:
             self.G.load_weights(weights + '_G_' + self.mode + '.h5')
-            self.D.load_weights(weights + '_D_' + self.mode + '.h5')
+            #self.D.load_weights(weights + '_D_' + self.mode + '.h5')
         if history:
             with open(history + '_' + self.mode + '.pkl', "rb") as h:
                 self.history = pickle.load(h)
@@ -214,19 +194,7 @@ class Net():
             s[:,:,c] = s[:,:,c]*coeff[0] + coeff[1]
             
     def _augmentator(self, o, s, median, mad):
-        
-        self.linear_fit(o, s, 0.95)
-                   
-        # stretch
-        sigma = 1.5 + (4.0-1.5)*np.random.rand()
-        bg = 0.15 + (0.3-0.15)*np.random.rand()
-        
-        #sigma = 3.0
-        #bg = 0.15
-        
-        o, s = stretch(o, s, bg, sigma, median, mad)
 
-              
         # flip horizontally
         if np.random.rand() < 0.50:
             o = np.flip(o, axis = 1)
@@ -243,6 +211,7 @@ class Net():
             o = np.rot90(o, k, axes = (1, 0))
             s = np.rot90(s, k, axes = (1, 0))
         
+        """
         if self.mode == 'RGB':
             
             o_hsv = rgb_to_hsv(o)
@@ -281,9 +250,19 @@ class Net():
                 offset = np.random.rand() * 0.25 - np.random.rand() * m
                 o[:, :] = o[:, :] + offset * (1.0 - o[:, :])
                 s[:, :] = s[:, :] + offset * (1.0 - s[:, :])
-            
-        o = np.clip(o, 0.0, 1.0)
-        s = np.clip(s, 0.0, 1.0)
+        """
+        #o_median = np.median(o ,axis=[0,1])
+        #o_mad = np.median(np.abs(o - o_median), axis=[0,1])
+        #s_median = np.median(s ,axis=[0,1])
+        #s_mad = np.median(np.abs(s - s_median), axis=[0,1])
+        
+        o = (o - median) / mad * 0.04
+        s = (s - median) / mad * 0.04
+        self.linear_fit(o, s, 5)
+        
+        o = np.clip(o, -1.0, 1.0)
+        s = np.clip(s, -1.0, 1.0)
+
         
         return o, s
 
@@ -326,9 +305,6 @@ class Net():
                     self.validate()
                 
                 x, y = self.generate_input(augmentation = augmentation)
-
-                x = x * 2 - 1
-                y = y * 2 - 1
                 
                 if warm_up: y = x
                 
@@ -336,29 +312,21 @@ class Net():
                     plt.close()
                     fig, ax = plt.subplots(1, 4, sharex = True, figsize=(16.5, 16.5))
                     if self.mode == 'RGB':
-                        ax[0].imshow((x[0] + 1) / 2)
+                        ax[0].imshow(x[0]*3 + 0.2,vmin=0,vmax=1)
                         ax[0].set_title('short')
-                        ax[1].imshow((self.G(x)[0] + 1) / 2)
+                        ax[1].imshow(self.G(x)[0]*3 + 0.2,vmin=0,vmax=1)
                         ax[1].set_title('output')
-                        ax[2].imshow((y[0] + 1) / 2)
+                        ax[2].imshow(y[0]*3 + 0.2,vmin=0,vmax=1)
                         ax[2].set_title('long')
                         
-                        ax[3].imshow(10 * np.abs((y[0] + 1) / 2 - (self.G(x)[0] + 1) / 2))
-                        ax[3].set_title('Difference x10')
-
-                    else:
-                        ax[0].imshow((x[0, :, :, 0] + 1) / 2, cmap='gray', vmin = 0, vmax = 1)
-                        ax[0].set_title('short')
-                        ax[1].imshow((self.G(x)[0, :, :, 0] + 1) / 2, cmap='gray', vmin = 0, vmax = 1)
-                        ax[1].set_title('long')
-                        ax[2].imshow((y[0, :, :, 0] + 1) / 2, cmap='gray', vmin = 0, vmax = 1)
-                        ax[2].set_title('Target')
+                        ax[3].imshow(30 * np.abs(y[0] - self.G(x)[0]))
+                        ax[3].set_title('Difference x30')
                     
                     display.clear_output(wait = True)
                     display.display(plt.gcf())
                 
                 if i > 0:
-                    print("\rEpoch: %d. Iteration %d / %d Loss %f L1 Loss %f   " % (e, i, self.iters_per_epoch, np.mean(self.history['total'][-500:]), np.mean(self.history['gen_L1'][-500:])), end = '')
+                    print("\rEpoch: %d. Iteration %d / %d Loss %f L1 Loss %f Gen Loss GAN %f " % (e, i, self.iters_per_epoch, np.mean(self.history['total'][-500:]), np.mean(self.history['gen_L1'][-500:]), np.mean(self.history['gen_loss_GAN'][-500:])), end = '')
                     #print("\rEpoch: %d. Iteration %d / %d L1 Loss %f   " % (e, i, self.iters_per_epoch, self.history['gen_L1'][-1]), end = '')
                 else:
                     print("\rEpoch: %d. Iteration %d / %d " % (e, i, self.iters_per_epoch), end = '')
@@ -367,46 +335,29 @@ class Net():
                 with tf.GradientTape() as gen_tape, tf.GradientTape() as dis_tape:
                     gen_output = self.G(x)
                     
-                    p1_real, p2_real, p3_real, p4_real, p5_real, p6_real, p7_real, p8_real, predict_real = self.D(y)
-                    p1_fake, p2_fake, p3_fake, p4_fake, p5_fake, p6_fake, p7_fake, p8_fake, predict_fake = self.D(gen_output)
+                    disc_generated_output = self.D([x, gen_output])
+                    disc_real_output = self.D([x, y])
+                    
+                    
                     
                     d = {}
                     
-                    dis_loss = tf.reduce_mean(-(tf.math.log(predict_real + 1E-8) + tf.math.log(1 - predict_fake + 1E-8)))
-                    d['dis_loss'] = dis_loss
-                    
-                    gen_loss_GAN = tf.reduce_mean(-tf.math.log(predict_fake + 1E-8))
+                    loss_object = tf.keras.losses.BinaryCrossentropy(from_logits=True)
+                    gen_loss_GAN = loss_object(tf.ones_like(disc_generated_output), disc_generated_output)
                     d['gen_loss_GAN'] = gen_loss_GAN
                     
-                    gen_p1 = tf.reduce_mean(tf.abs(p1_fake - p1_real))
-                    d['gen_p1'] = gen_p1
+                    dis_loss = loss_object(tf.ones_like(disc_real_output), disc_real_output) + loss_object(tf.zeros_like(disc_generated_output), disc_generated_output)
+                    d['dis_loss'] = dis_loss
                     
-                    gen_p2 = tf.reduce_mean(tf.abs(p2_fake - p2_real))
-                    d['gen_p2'] = gen_p2
-                    
-                    gen_p3 = tf.reduce_mean(tf.abs(p3_fake - p3_real))
-                    d['gen_p3'] = gen_p3
-                    
-                    gen_p4 = tf.reduce_mean(tf.abs(p4_fake - p4_real))
-                    d['gen_p4'] = gen_p4
-                    
-                    gen_p5 = tf.reduce_mean(tf.abs(p5_fake - p5_real))
-                    d['gen_p5'] = gen_p5
-                    
-                    gen_p6 = tf.reduce_mean(tf.abs(p6_fake - p6_real))
-                    d['gen_p6'] = gen_p6
-                    
-                    gen_p7 = tf.reduce_mean(tf.abs(p7_fake - p7_real))
-                    d['gen_p7'] = gen_p7
-                    
-                    gen_p8 = tf.reduce_mean(tf.abs(p8_fake - p8_real))
-                    d['gen_p8'] = gen_p8
                     
                     gen_L1 = tf.reduce_mean(tf.abs(y - gen_output))
                     d['gen_L1'] = gen_L1 * 100
                     
-                    gen_loss = gen_loss_GAN * 0.1 + gen_p1 * 0.1 + gen_p2 * 10 + gen_p3 * 10 + gen_p4 * 10 + gen_p5 * 10 + gen_p6 * 10 + gen_p7 * 10 + gen_p8 * 10 + gen_L1 * 100
-                    #gen_loss = gen_L1 * 100
+                    
+                    #gen_loss = 0.1 * (gen_loss_GAN * 0.1 + gen_p1 * 0.1 + gen_p2 * 10 + gen_p3 * 10 + gen_p4 * 10 + gen_p5 * 10 + gen_p6 * 10 + gen_p7 * 10 + gen_p8 * 10) + gen_L1 * 100
+                    #gen_loss = 100 * gen_L1 + 0.02*gen_loss_GAN
+                    gen_loss = 100 * gen_L1
+                    
                     d['total'] = gen_loss
                     
                     for k in d:
@@ -565,7 +516,8 @@ class Net():
         image = np.concatenate((image, image[:, (w - offset) :, :]), axis = 1)
         image = np.concatenate((image[:, : offset, :], image), axis = 1)
         
-        image = image * 2 - 1
+        median = np.median(image[::4,::4,:], axis=[0,1])
+        mad = np.median(np.abs(image[::4,::4,:]-median), axis=[0,1])
         
         output = copy.deepcopy(image)
         
@@ -575,10 +527,18 @@ class Net():
                 x = self.stride * i
                 y = self.stride * j
                 
-                tile = np.expand_dims(image[x:x+self.window_size, y:y+self.window_size, :], axis = 0)
+                tile = image[x:x+self.window_size, y:y+self.window_size, :]
+                #tile_median = np.median(tile, axis=[0,1])
+                #tile_mad = np.median(np.abs(tile-tile_median), axis=[0,1])
+                tile = (tile - median) / mad * 0.04
+                tile_copy = tile.copy()
+                tile = np.clip(tile, -1.0, 1.0)
+                
+                tile = np.expand_dims(tile, axis = 0)
                 tile = np.array(self.G(tile)[0])
-                #self.linear_fit(image[x:x+self.window_size, y:y+self.window_size, :], tile, 0.95)
-                tile = (tile + 1) / 2
+                
+                tile = np.where(tile_copy < 0.95, tile, tile_copy)
+                tile = tile / 0.04 * mad + median
                 tile = tile[offset:offset+self.stride, offset:offset+self.stride, :]
                 output[x+offset:self.stride*(i+1)+offset, y+offset:self.stride*(j+1)+offset, :] = tile
         
@@ -598,91 +558,64 @@ class Net():
          hdul.writeto(path + name + '.fits')       
 
     def _generator(self):
-        #return pridnet(self.window_size,self.input_channels)
+        return pridnet(self.window_size,self.input_channels)
         #return unet(self.window_size,self.input_channels)
-        return ridnet(self.window_size,self.input_channels)
-        
+        #return ridnet(self.window_size,self.input_channels)
+    
+    def downsample(self, filters, size, apply_batchnorm=True):
+      initializer = tf.random_normal_initializer(0., 0.02)
+    
+      result = tf.keras.Sequential()
+      result.add(
+          tf.keras.layers.Conv2D(filters, size, strides=2, padding='same',
+                                 kernel_initializer=initializer, use_bias=False))
+    
+      if apply_batchnorm:
+        result.add(tf.keras.layers.BatchNormalization())
+    
+      result.add(tf.keras.layers.LeakyReLU())
+
+      return result
+  
     def _discriminator(self):
-        layers = []
-        filters = [32, 64, 64, 128, 128, 256, 256, 256, 8]
-        #filters = [int(1/2*filter) for filter in filters]
         
-        input = L.Input(shape=(self.window_size, self.window_size, self.input_channels), name = "dis_input_image")
-        
-        # layer 1
-        convolved = L.Conv2D(filters[0], kernel_size = 3, strides = (1, 1), padding="same")(input)
-        rectified = L.LeakyReLU(alpha = 0.2)(convolved)
-        layers.append(rectified)
-            
-        # layer 2
-        convolved = L.Conv2D(filters[1], kernel_size = 3, strides = (2, 2), padding="valid")(layers[-1])
-        normalized = L.BatchNormalization()(convolved, training = True)
-        rectified = L.LeakyReLU(alpha = 0.2)(normalized)
-        layers.append(rectified)
-            
-        # layer 3
-        convolved = L.Conv2D(filters[2], kernel_size = 3, strides = (1, 1), padding="same")(layers[-1])
-        normalized = L.BatchNormalization()(convolved, training = True)
-        rectified = L.LeakyReLU(alpha = 0.2)(normalized)
-        layers.append(rectified)
-            
-        # layer 4
-        convolved = L.Conv2D(filters[3], kernel_size = 3, strides = (2, 2), padding="valid")(layers[-1])
-        normalized = L.BatchNormalization()(convolved, training = True)
-        rectified = L.LeakyReLU(alpha = 0.2)(normalized)
-        layers.append(rectified)
-            
-        # layer 5
-        convolved = L.Conv2D(filters[4], kernel_size = 3, strides = (1, 1), padding="same")(layers[-1])
-        normalized = L.BatchNormalization()(convolved, training = True)
-        rectified = L.LeakyReLU(alpha = 0.2)(normalized)
-        layers.append(rectified)
-            
-        # layer 6
-        convolved = L.Conv2D(filters[5], kernel_size = 3, strides = (2, 2), padding="valid")(layers[-1])
-        normalized = L.BatchNormalization()(convolved, training = True)
-        rectified = L.LeakyReLU(alpha = 0.2)(normalized)
-        layers.append(rectified)
-            
-        # layer 7
-        convolved = L.Conv2D(filters[6], kernel_size = 3, strides = (1, 1), padding="same")(layers[-1])
-        normalized = L.BatchNormalization()(convolved, training = True)
-        rectified = L.LeakyReLU(alpha = 0.2)(normalized)
-        layers.append(rectified)
-            
-        # layer 8
-        convolved = L.Conv2D(filters[7], kernel_size = 3, strides = (2, 2), padding="valid")(layers[-1])
-        normalized = L.BatchNormalization()(convolved, training = True)
-        rectified = L.LeakyReLU(alpha = 0.2)(normalized)
-        layers.append(rectified)
-            
-        # layer 9
-        convolved = L.Conv2D(filters[8], kernel_size = 3, strides = (2, 2), padding="valid")(layers[-1])
-        normalized = L.BatchNormalization()(convolved, training = True)
-        rectified = L.LeakyReLU(alpha = 0.2)(normalized)
-        layers.append(rectified)
-            
-        # layer 10
-        dense = L.Dense(1)(layers[-1])
-        sigmoid = tf.nn.sigmoid(dense)
-        layers.append(sigmoid)
-        
-        output = [layers[0], layers[1], layers[2], layers[3], layers[4], layers[5], layers[6], layers[7], layers[-1]]
-            
-        return K.Model(inputs = input, outputs = output, name = "discriminator")
+        initializer = tf.random_normal_initializer(0., 0.02)
+      
+        inp = tf.keras.layers.Input(shape=[self.window_size, self.window_size, 3], name='input_image')
+        tar = tf.keras.layers.Input(shape=[self.window_size, self.window_size, 3], name='target_image')
+      
+        x = tf.keras.layers.concatenate([inp, tar])  # (batch_size, 256, 256, channels*2)
+      
+        down1 = self.downsample(64, 4, False)(x)  # (batch_size, 128, 128, 64)
+        down2 = self.downsample(128, 4)(down1)  # (batch_size, 64, 64, 128)
+        down3 = self.downsample(256, 4)(down2)  # (batch_size, 32, 32, 256)
+      
+        zero_pad1 = tf.keras.layers.ZeroPadding2D()(down3)  # (batch_size, 34, 34, 256)
+        conv = tf.keras.layers.Conv2D(512, 4, strides=1,
+                                      kernel_initializer=initializer,
+                                      use_bias=False)(zero_pad1)  # (batch_size, 31, 31, 512)
+      
+        batchnorm1 = tf.keras.layers.BatchNormalization()(conv)
+      
+        leaky_relu = tf.keras.layers.LeakyReLU()(batchnorm1)
+      
+        zero_pad2 = tf.keras.layers.ZeroPadding2D()(leaky_relu)  # (batch_size, 33, 33, 512)
+      
+        last = tf.keras.layers.Conv2D(1, 4, strides=1,
+                                      kernel_initializer=initializer)(zero_pad2)  # (batch_size, 30, 30, 1)
+      
+        return tf.keras.Model(inputs=[inp, tar], outputs=last)
     
 
 
-Net = Net(mode = 'RGB', window_size = 256, train_folder = './train/', lr = 1e-5, batch_size = 1, stride=128, 
+Net = Net(mode = 'RGB', window_size = 256, train_folder = './train', lr = 2e-7, batch_size = 2, stride=128, 
           validation_folder = "./validation/", validation = False)
-Net.load_training_dataset()
+#Net.load_training_dataset()
 
-#Net.load_model('./weights_ridnet_dis/weights')
-Net.load_model('./weights', './history')
+Net.load_model('./weights')
 
-
-Net.train(1, plot_progress = True, plot_interval = 50, augmentation=True, save_backups=False, warm_up = False)
-Net.save_model('./weights', './history')
+#Net.train(99, plot_progress = False, plot_interval = 1000, augmentation=True, save_backups=True, warm_up = False)
+#Net.save_model('./weights', './history')
 
 Net.plot_history()
-#Net.transform("./noisy.fits","denoised")
+Net.transform("./noisy.fits","denoised")
